@@ -1,2 +1,0 @@
-# OPENCV
-open cv project
