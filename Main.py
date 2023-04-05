@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import winsound
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.graphics.texture import Texture
@@ -65,14 +66,17 @@ class LaneDetectionUI(BoxLayout):
         cv2.fillPoly(mask, vertices, 0)
         masked_edges = cv2.bitwise_and(edges, mask)
 
-        # Detect lines using Hough transform
+         # Detect lines using Hough transform
         self.lines = cv2.HoughLinesP(masked_edges, rho=1, theta=np.pi/180, threshold=20, minLineLength=40, maxLineGap=5)
         if self.lines is not None:
             for line in self.lines:
                 x1, y1, x2, y2 = line[0]
                 cv2.line(frame, (x1, y1), (x2, y2), (255, 0, 0), 10)
 
-
+                # Check if the line crosses a threshold (e.g. the center of the image)
+                if (x1 + x2) / 2 < width / 2 - 50 or (x1 + x2) / 2 > width / 2 + 50:
+                    # Play a beep sound using the winsound library
+                    winsound.Beep(1000, 500)
 
         # Convert the frame to a texture and display it in the Kivy UI
         buf1 = cv2.flip(frame, 0)
