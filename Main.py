@@ -6,6 +6,7 @@ from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.lang import Builder
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.filechooser import FileChooserListView
 from kivy.properties import ObjectProperty
 
 
@@ -22,6 +23,10 @@ Builder.load_string("""
             on_state:
                 root.detect_lanes(self.state == 'down')
         Button:
+            text: 'Choose Video'
+            on_release:
+                root.choose_video()
+        Button:
             text: 'Quit'
             on_release: app.stop()
     Image:
@@ -30,24 +35,57 @@ Builder.load_string("""
         keep_ratio: False
 """)
 
+
+def region_of_interest(img):
+    height = img.shape[0]
+    polygons = np.array([
+        [(200, height), (1100, height), (550, 250)]
+    ])
+    mask = np.zeros_like(img)
+    cv2.fillPoly(mask, polygons, 255)
+    masked_img = cv2.bitwise_and(img, mask)
+    return masked_img
+
 class LaneDetectionUI(BoxLayout):
     camera_preview = ObjectProperty(None)
 
+    def choose_video(self):
+        filechooser = FileChooserListView()
+        filechooser.bind(selection=self.play_video)
+        self.add_widget(filechooser)
+
+    def play_video(self, instance, selection):
+        if selection:
+            video_path = selection[0]
+            self.cap = cv2.VideoCapture(video_path)
+            Clock.schedule_interval(self.update_frame, 1.0/30.0)
+            self.remove_widget(instance)
+
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.cap = cv2.VideoCapture(0)  # Open the default camera
+        super(LaneDetectionUI, self).__init__(**kwargs)
+        self.cap = None
         self.lines = []
+        self.beep = False
+
 
     def detect_lanes(self, start_detection):
         if start_detection:
-            Clock.schedule_interval(self.update_frame, 1/60.)  # Call update_frame() 60 times per second
+            if self.cap is None:
+                self.cap = cv2.VideoCapture(0)
+            Clock.schedule_interval(self.update_frame, 1.0/30.0)
         else:
             Clock.unschedule(self.update_frame)
+            if self.cap is not None:
+                self.cap.release()
+            self.cap = None
+
 
     def update_frame(self, dt):
-        ret, frame = self.cap.read()  # Capture a frame from the camera
+        ret, frame = self.cap.read()
         if not ret:
             return
+
+        width = frame.shape[1]
 
         # Convert the frame to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -59,31 +97,31 @@ class LaneDetectionUI(BoxLayout):
         edges = cv2.Canny(blur, 50, 150)
 
         # Create a mask for the edges image
-        mask = np.zeros_like(edges)
-        mask.fill(255)
-        height, width = frame.shape[:2]
-        vertices = np.array([[(0, height), (width/2, height/2), (width, height)]], dtype=np.int32)
-        cv2.fillPoly(mask, vertices, 0)
-        masked_edges = cv2.bitwise_and(edges, mask)
+        masked_edges = region_of_interest(edges)
 
-         # Detect lines using Hough transform
-        self.lines = cv2.HoughLinesP(masked_edges, rho=1, theta=np.pi/180, threshold=20, minLineLength=40, maxLineGap=5)
-        if self.lines is not None:
-            for line in self.lines:
+        # Find lines using Hough transform
+        lines = cv2.HoughLinesP(masked_edges, 2, np.pi/180, 100, np.array([]), minLineLength=40, maxLineGap=2)
+
+        # If lines are found, draw them on the original frame
+        if lines is not None:
+            for line in lines:
                 x1, y1, x2, y2 = line[0]
-                cv2.line(frame, (x1, y1), (x2, y2), (255, 0, 0), 10)
+                if (x1 + x2) / 2 > width / 2 + 50 or (x1 + x2) / 2 < width / 2 - 50:
+                    self.beep = True
+                    cv2.line(frame, (x1, y1), (x2, y2), (255, 0, 0), 10)
 
-                # Check if the line crosses a threshold (e.g. the center of the image)
-                if (x1 + x2) / 2 < width / 2 - 50 or (x1 + x2) / 2 > width / 2 + 50:
-                    # Play a beep sound using the winsound library
-                    winsound.Beep(1000, 500)
+        # Play beep sound if lane departure is detected
+        if self.beep:
+            winsound.Beep(1000, 500)
 
-        # Convert the frame to a texture and display it in the Kivy UI
+        # Update the camera preview
         buf1 = cv2.flip(frame, 0)
         buf = buf1.tostring()
-        texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
-        texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
-        self.camera_preview.texture = texture
+        image_texture = Texture.create(
+            size=(frame.shape[1], frame.shape[0]), colorfmt='bgr')
+        image_texture.blit_buffer(buf, colorfmt='bgr', bufferfmt='ubyte')
+        self.camera_preview.texture = image_texture
+
 
 class LaneDetectionApp(App):
     def build(self):
